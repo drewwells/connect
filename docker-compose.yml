@@ -2,13 +2,13 @@ vpn:
   build: .
   #command: bash -c "NODE_PATH=/node_modules node /ui/server.js"
   ports:
-    - "8080:8080"
+    - "7999:8080"
   privileged: true
   environment:
     - USER
     - PASS
+    - SERVER
 proxy:
   build: ./goproxy
   dockerfile: Dockerfile
   net: container:vpn
-  command: bash -c "app -v"
