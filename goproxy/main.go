@@ -54,17 +54,15 @@ func serve(c config, verbose bool) {
 	svr.Verbose = verbose
 	fmt.Printf("Starting proxy server at: %s verbose: %t", c.Listen, verbose)
 
-	var allow goproxy.ReqConditionFunc = func(req *http.Request, ctx *goproxy.ProxyCtx) bool {
-		for _, al := range c.Allow {
-			if strings.Contains(req.URL.String(), al) {
-				return true
-			}
-		}
-		return false
-	}
-
 	svr.OnRequest(
-		allow,
+		goproxy.ReqConditionFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) bool {
+			for _, al := range c.Allow {
+				if strings.Contains(req.URL.String(), al) {
+					return true
+				}
+			}
+			return false
+		}),
 		// goproxy.ReqHostIs(c.Allow...),
 		goproxy.Not(goproxy.ReqHostIs(c.Block...)),
 	).DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
