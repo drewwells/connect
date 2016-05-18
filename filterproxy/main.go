@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -89,12 +90,25 @@ func serve(c config, verbose bool) {
 	}
 	fmt.Println("upstream server", remoteaddr)
 
+	dial := func(network, addr string) (net.Conn, error) {
+		u := &url.URL{Host: addr}
+		// non-HTTP traffic seems to not use proxy, check again here
+		// ensuring we aren't preventin access to the remote address
+		if !rules(c, u) {
+			return net.Dial(network, addr)
+		}
+		fmt.Println("dialer caught...", addr)
+		return svr.NewConnectDialToProxy(remoteaddr)(network, addr)
+	}
 	svr.Tr = &http.Transport{
+		DialTLS: dial,
+		Dial:    dial,
 		Proxy: func(r *http.Request) (*url.URL, error) {
 			if !rules(c, r.URL) {
+				fmt.Println("Bypass", r.URL)
 				return r.URL, nil
 			}
-
+			fmt.Println("Forwarding request for", r.URL)
 			return remoteURL, nil
 		},
 	}

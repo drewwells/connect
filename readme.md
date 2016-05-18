@@ -5,8 +5,8 @@ For this solution, we start a container that sends all of its traffic to the con
 
 Start the connect containers:
 
-	USER={username} PASS={password} docker-compose up
+	SERVEr={vpnserver.com} USER={username} PASS={password} docker-compose up
 
-Configure your traffic to go through an HTTP proxy:
+Configure your traffic to go through an HTTP proxy (default is 7800):
 
-    HTTP_PROXY=http://localhost:8080
+    HTTP_PROXY=http://localhost:7800
