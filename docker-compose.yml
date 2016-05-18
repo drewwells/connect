@@ -8,6 +8,7 @@ vpn:
     - USER
     - PASS
 proxy:
-  image: goproxy
+  build: ./goproxy
+  dockerfile: Dockerfile
   net: container:vpn
   command: bash -c "app -v"
