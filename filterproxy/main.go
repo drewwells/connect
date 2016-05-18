@@ -1,14 +1,13 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
-	"regexp"
+	"net/url"
+	"strings"
 
 	"github.com/elazarl/goproxy"
 	"github.com/hashicorp/hcl"
@@ -25,15 +24,17 @@ type config struct {
 	Listen  string   // addr to listen on
 	Allow   []string // Slice of patterns to forward
 	Block   []string
+	Remote  string
 }
 
 func main() {
+	var listen string
 	p := params{}
-	c := config{}
+	c := config{Listen: ":7999"}
 
 	flag.BoolVar(&p.verbose, "v", false, "should every proxy request be logged to stdout")
 	flag.StringVar(&p.configFile, "config", "", "location of config file")
-	flag.StringVar(&c.Listen, "listen", ":7999", "address to listen to")
+	flag.StringVar(&listen, "listen", "", "address to listen to")
 	flag.Parse()
 
 	if len(p.configFile) > 0 {
@@ -46,8 +47,34 @@ func main() {
 		}
 	}
 
+	if len(listen) > 0 {
+		c.Listen = listen
+	}
+
 	serve(c, p.verbose)
 
+}
+
+func rules(c config, l *url.URL) bool {
+	path := l.Host
+	var forward bool
+	for _, allow := range c.Allow {
+		if strings.Contains(path, allow) {
+			forward = true
+		}
+
+	}
+	if forward {
+		for _, block := range c.Block {
+			if path == block {
+				forward = false
+			}
+		}
+	}
+	if forward {
+		fmt.Println("forwarding request to proxy", path)
+	}
+	return forward
 }
 
 func serve(c config, verbose bool) {
@@ -55,93 +82,22 @@ func serve(c config, verbose bool) {
 	svr := goproxy.NewProxyHttpServer()
 	svr.Verbose = verbose
 	fmt.Printf("...Starting proxy server at: %s verbose: %t\n", c.Listen, verbose)
-	remoteaddr := ":6543"
+	remoteaddr := c.Remote
+	remoteURL, err := url.Parse(remoteaddr)
+	if err != nil {
+		log.Fatal("failed to parse upstream server:", err)
+	}
 	fmt.Println("upstream server", remoteaddr)
 
-	tr := func(network, addr string) (net.Conn, error) {
-		fmt.Println("tr...", addr)
-		// return svr.NewConnectDialToProxy(remoteaddr)(network, addr)
-		// return svr.ConnectDial("tcp", remoteaddr)
-		//fmt.Println("sending upstream ", remoteaddr)
-		return net.Dial("tcp", addr)
-	}
-	_ = tr
-	// svr.Tr.Dial = tr
-	// svr.Tr.DialTLS = tr
-
-	// svr.ConnectDial = func(net, addr string) (net.Conn, error) {
-	// 	fmt.Println("connectdial to upstream", addr)
-	// 	return svr.NewConnectDialToProxy(addr)(net, addr)
-	// }
-	//svr.OnRequest(goproxy.ReqHostMatches(regexp.MustCompile("^.*baidu.com$"))).
-	//	HandleConnect(goproxy.AlwaysReject)
-	svr.OnRequest(goproxy.ReqHostMatches(regexp.MustCompile("^.*$"))).
-		HandleConnect(goproxy.AlwaysMitm)
-
-	svr.OnRequest(goproxy.ReqHostMatches(regexp.MustCompile("^.*:80$"))).
-
-		// svr.OnRequest(
-		// 	goproxy.ReqConditionFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) bool {
-		// 		for _, al := range c.Allow {
-		// 			if strings.Contains(req.URL.String(), al) {
-		// 				return true
-		// 			}
-		// 		}
-		// 		return false
-		// 	}),
-		// 	//goproxy.Not(goproxy.ReqHostIs(c.Block...)),
-		// )
-		HijackConnect(func(req *http.Request, client net.Conn, ctx *goproxy.ProxyCtx) {
-			defer func() {
-				if e := recover(); e != nil {
-					ctx.Logf("error connecting to remote: %v", e)
-					client.Write([]byte("HTTP/1.1 500 Cannot reach destination\r\n\r\n"))
-				}
-				client.Close()
-			}()
-			fmt.Println("Hijacking", req.URL)
-			clientBuf := bufio.NewReadWriter(bufio.NewReader(client), bufio.NewWriter(client))
-			remote, err := connectDial(svr, "tcp", req.URL.Host)
-			orPanic(err)
-			remoteBuf := bufio.NewReadWriter(bufio.NewReader(remote), bufio.NewWriter(remote))
-			for {
-				req, err := http.ReadRequest(clientBuf.Reader)
-				orPanic(err)
-				orPanic(req.Write(remoteBuf))
-				orPanic(remoteBuf.Flush())
-				resp, err := http.ReadResponse(remoteBuf.Reader, req)
-				orPanic(err)
-				orPanic(resp.Write(clientBuf.Writer))
-				orPanic(clientBuf.Flush())
+	svr.Tr = &http.Transport{
+		Proxy: func(r *http.Request) (*url.URL, error) {
+			if !rules(c, r.URL) {
+				return nil, nil
 			}
-		})
-		// DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-		// 	addr := ":6543"
-		// 	fmt.Printf("proxying %s to %s\n", req.URL, addr)
-		// 	return req, nil
-		// })
+
+			return remoteURL, nil
+		},
+	}
 
 	log.Fatal(http.ListenAndServe(c.Listen, svr))
-}
-
-func orPanic(err error) {
-	if err != nil {
-		log.Fatal(err)
-	}
-}
-
-// copied/converted from https.go
-func connectDial(proxy *goproxy.ProxyHttpServer, network, addr string) (c net.Conn, err error) {
-	if proxy.ConnectDial == nil {
-		return dial(proxy, network, addr)
-	}
-	return proxy.ConnectDial(network, addr)
-}
-
-// copied/converted from https.go
-func dial(proxy *goproxy.ProxyHttpServer, network, addr string) (c net.Conn, err error) {
-	if proxy.Tr.Dial != nil {
-		return proxy.Tr.Dial(network, addr)
-	}
-	return net.Dial(network, addr)
 }
