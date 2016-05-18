@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 
 	"github.com/elazarl/goproxy"
 	"github.com/hashicorp/hcl"
@@ -33,7 +35,6 @@ func main() {
 	flag.StringVar(&c.Listen, "listen", ":7999", "address to listen to")
 	flag.Parse()
 
-	p.verbose = true
 	if len(p.configFile) > 0 {
 		bs, err := ioutil.ReadFile(p.configFile)
 		if err == nil {
@@ -54,21 +55,48 @@ func serve(c config, verbose bool) {
 	svr.Verbose = verbose
 	fmt.Printf("Starting proxy server at: %s verbose: %t\n", c.Listen, verbose)
 
-	// svr.OnRequest(
-	// 	goproxy.ReqConditionFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) bool {
-	// 		for _, al := range c.Allow {
-	// 			if strings.Contains(req.URL.String(), al) {
-	// 				return true
-	// 			}
-	// 		}
-	// 		return false
-	// 	}),
-	// 	// goproxy.ReqHostIs(c.Allow...),
-	// 	goproxy.Not(goproxy.ReqHostIs(c.Block...)),
-	// ).DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-	// 	fmt.Println("proxying", req.URL)
-	// 	return req, nil
-	// })
+	tr := func(network, addr string) (net.Conn, error) {
+		fmt.Println("dialing", addr)
+		return net.Dial(network, addr)
+	}
+
+	svr.Tr.Dial = tr
+	svr.Tr.DialTLS = tr
+
+	svr.OnRequest(
+		goproxy.ReqConditionFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) bool {
+			for _, al := range c.Allow {
+				if strings.Contains(req.URL.String(), al) {
+					return true
+				}
+			}
+			return false
+		}),
+		// goproxy.ReqHostIs(c.Allow...),
+		//goproxy.Not(goproxy.ReqHostIs(c.Block...)),
+	).DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		addr := ":6543"
+		fmt.Printf("proxying %s to %s\n", req.URL, addr)
+		// remote, err := svr.ConnectDial("tcp", "localhost:6543")
+		remote, err := net.Dial("tcp", addr)
+		fmt.Println("dial returned", err)
+		if err != nil {
+			log.Println("error dialing upstream", err)
+		}
+
+		bbs, _ := ioutil.ReadAll(req.Body)
+		fmt.Println("request...", string(bbs))
+
+		bs, err := ioutil.ReadAll(remote)
+		if err != nil {
+			log.Println("error reading response", err)
+			return req, nil
+		}
+
+		fmt.Println("received", string(bs))
+
+		return req, nil
+	})
 
 	log.Fatal(http.ListenAndServe(c.Listen, svr))
 }
