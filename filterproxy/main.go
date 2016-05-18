@@ -1,13 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
-	"strings"
+	"regexp"
 
 	"github.com/elazarl/goproxy"
 	"github.com/hashicorp/hcl"
@@ -53,50 +54,94 @@ func serve(c config, verbose bool) {
 
 	svr := goproxy.NewProxyHttpServer()
 	svr.Verbose = verbose
-	fmt.Printf("Starting proxy server at: %s verbose: %t\n", c.Listen, verbose)
+	fmt.Printf("...Starting proxy server at: %s verbose: %t\n", c.Listen, verbose)
+	remoteaddr := ":6543"
+	fmt.Println("upstream server", remoteaddr)
 
 	tr := func(network, addr string) (net.Conn, error) {
-		fmt.Println("dialing", addr)
-		return net.Dial(network, addr)
+		fmt.Println("tr...", addr)
+		// return svr.NewConnectDialToProxy(remoteaddr)(network, addr)
+		// return svr.ConnectDial("tcp", remoteaddr)
+		//fmt.Println("sending upstream ", remoteaddr)
+		return net.Dial("tcp", addr)
 	}
+	_ = tr
+	// svr.Tr.Dial = tr
+	// svr.Tr.DialTLS = tr
 
-	svr.Tr.Dial = tr
-	svr.Tr.DialTLS = tr
+	// svr.ConnectDial = func(net, addr string) (net.Conn, error) {
+	// 	fmt.Println("connectdial to upstream", addr)
+	// 	return svr.NewConnectDialToProxy(addr)(net, addr)
+	// }
+	//svr.OnRequest(goproxy.ReqHostMatches(regexp.MustCompile("^.*baidu.com$"))).
+	//	HandleConnect(goproxy.AlwaysReject)
+	svr.OnRequest(goproxy.ReqHostMatches(regexp.MustCompile("^.*$"))).
+		HandleConnect(goproxy.AlwaysMitm)
 
-	svr.OnRequest(
-		goproxy.ReqConditionFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) bool {
-			for _, al := range c.Allow {
-				if strings.Contains(req.URL.String(), al) {
-					return true
+	svr.OnRequest(goproxy.ReqHostMatches(regexp.MustCompile("^.*:80$"))).
+
+		// svr.OnRequest(
+		// 	goproxy.ReqConditionFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) bool {
+		// 		for _, al := range c.Allow {
+		// 			if strings.Contains(req.URL.String(), al) {
+		// 				return true
+		// 			}
+		// 		}
+		// 		return false
+		// 	}),
+		// 	//goproxy.Not(goproxy.ReqHostIs(c.Block...)),
+		// )
+		HijackConnect(func(req *http.Request, client net.Conn, ctx *goproxy.ProxyCtx) {
+			defer func() {
+				if e := recover(); e != nil {
+					ctx.Logf("error connecting to remote: %v", e)
+					client.Write([]byte("HTTP/1.1 500 Cannot reach destination\r\n\r\n"))
 				}
+				client.Close()
+			}()
+			fmt.Println("Hijacking", req.URL)
+			clientBuf := bufio.NewReadWriter(bufio.NewReader(client), bufio.NewWriter(client))
+			remote, err := connectDial(svr, "tcp", req.URL.Host)
+			orPanic(err)
+			remoteBuf := bufio.NewReadWriter(bufio.NewReader(remote), bufio.NewWriter(remote))
+			for {
+				req, err := http.ReadRequest(clientBuf.Reader)
+				orPanic(err)
+				orPanic(req.Write(remoteBuf))
+				orPanic(remoteBuf.Flush())
+				resp, err := http.ReadResponse(remoteBuf.Reader, req)
+				orPanic(err)
+				orPanic(resp.Write(clientBuf.Writer))
+				orPanic(clientBuf.Flush())
 			}
-			return false
-		}),
-		// goproxy.ReqHostIs(c.Allow...),
-		//goproxy.Not(goproxy.ReqHostIs(c.Block...)),
-	).DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-		addr := ":6543"
-		fmt.Printf("proxying %s to %s\n", req.URL, addr)
-		// remote, err := svr.ConnectDial("tcp", "localhost:6543")
-		remote, err := net.Dial("tcp", addr)
-		fmt.Println("dial returned", err)
-		if err != nil {
-			log.Println("error dialing upstream", err)
-		}
-
-		bbs, _ := ioutil.ReadAll(req.Body)
-		fmt.Println("request...", string(bbs))
-
-		bs, err := ioutil.ReadAll(remote)
-		if err != nil {
-			log.Println("error reading response", err)
-			return req, nil
-		}
-
-		fmt.Println("received", string(bs))
-
-		return req, nil
-	})
+		})
+		// DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		// 	addr := ":6543"
+		// 	fmt.Printf("proxying %s to %s\n", req.URL, addr)
+		// 	return req, nil
+		// })
 
 	log.Fatal(http.ListenAndServe(c.Listen, svr))
+}
+
+func orPanic(err error) {
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+// copied/converted from https.go
+func connectDial(proxy *goproxy.ProxyHttpServer, network, addr string) (c net.Conn, err error) {
+	if proxy.ConnectDial == nil {
+		return dial(proxy, network, addr)
+	}
+	return proxy.ConnectDial(network, addr)
+}
+
+// copied/converted from https.go
+func dial(proxy *goproxy.ProxyHttpServer, network, addr string) (c net.Conn, err error) {
+	if proxy.Tr.Dial != nil {
+		return proxy.Tr.Dial(network, addr)
+	}
+	return net.Dial(network, addr)
 }
