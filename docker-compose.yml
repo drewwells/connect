@@ -13,3 +13,11 @@ proxy:
   dockerfile: Dockerfile
   net: container:vpn
   command: app -v -listen :6543
+filter:
+  build: ./filterproxy
+  dockerfile: Dockerfile
+  command: app -v -listen :7800 -config proxy.cfg
+  ports:
+    - "7800:7800"
+  links:
+    - vpn

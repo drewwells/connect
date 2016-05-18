@@ -92,7 +92,7 @@ func serve(c config, verbose bool) {
 	svr.Tr = &http.Transport{
 		Proxy: func(r *http.Request) (*url.URL, error) {
 			if !rules(c, r.URL) {
-				return nil, nil
+				return r.URL, nil
 			}
 
 			return remoteURL, nil
