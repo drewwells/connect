@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"net/url"
 	"strings"
 
@@ -52,6 +53,11 @@ func main() {
 		c.Listen = listen
 	}
 
+	// pprof
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
 	serve(c, p.verbose)
 
 }
@@ -73,22 +79,31 @@ func rules(c config, l *url.URL) bool {
 		}
 	}
 	if forward {
-		fmt.Println("forwarding request to proxy", path)
+		// fmt.Println("forwarding request to proxy", path)
 	}
 	return forward
 }
 
-func serve(c config, verbose bool) {
+// FIXME: make it part of config
+var printVerbose bool
 
+func printf(format string, a ...interface{}) {
+	if printVerbose {
+		fmt.Printf(format, a...)
+	}
+}
+
+func serve(c config, verbose bool) {
+	printVerbose = verbose
 	svr := goproxy.NewProxyHttpServer()
 	svr.Verbose = verbose
-	fmt.Printf("...Starting proxy server at: %s verbose: %t\n", c.Listen, verbose)
+	fmt.Printf("Starting proxy server at: %s verbose: %t\n", c.Listen, verbose)
 	remoteaddr := c.Remote
 	remoteURL, err := url.Parse(remoteaddr)
 	if err != nil {
 		log.Fatal("failed to parse upstream server:", err)
 	}
-	fmt.Println("upstream server", remoteaddr)
+	printf("upstream server %s\n", remoteaddr)
 
 	dial := func(network, addr string) (net.Conn, error) {
 		u := &url.URL{Host: addr}
@@ -97,20 +112,24 @@ func serve(c config, verbose bool) {
 		if !rules(c, u) {
 			return net.Dial(network, addr)
 		}
-		fmt.Println("dialer caught...", addr)
+		printf("dialing upstream proxy... %s\n", addr)
 		return svr.NewConnectDialToProxy(remoteaddr)(network, addr)
 	}
+	_ = remoteURL
 	svr.Tr = &http.Transport{
 		DialTLS: dial,
 		Dial:    dial,
-		Proxy: func(r *http.Request) (*url.URL, error) {
-			if !rules(c, r.URL) {
-				fmt.Println("Bypass", r.URL)
-				return r.URL, nil
-			}
-			fmt.Println("Forwarding request for", r.URL)
-			return remoteURL, nil
-		},
+		// Proxy: func(r *http.Request) (*url.URL, error) {
+		// 	if !rules(c, r.URL) {
+		// 		printf("Proxy Bypass %s\n", r.URL)
+		// 		return r.URL, nil
+		// 	}
+		// 	printf("Forwarding request for %s\n", r.URL)
+		// 	return remoteURL, nil
+		// },
+		// All requests go to the same host, this will increase throughput
+		MaxIdleConnsPerHost: 1000,
+		DisableKeepAlives:   true,
 	}
 
 	log.Fatal(http.ListenAndServe(c.Listen, svr))
