@@ -2,17 +2,21 @@ vpn:
   build: .
   #command: bash -c "NODE_PATH=/node_modules node /ui/server.js"
   ports:
-    - "6543:6543"
+    - "6543:3128"
   privileged: true
   environment:
     - USER
     - PASS
     - SERVER
+squid:
+  image: sameersbn/squid:3.3.8-14
+  net: container:vpn
+  command: -d ALL,9
 proxy:
   build: ./goproxy
   dockerfile: Dockerfile
   net: container:vpn
-  command: app -listen :6543
+  command: app -listen :3128 -v
 filter:
   build: ./filterproxy
   dockerfile: Dockerfile
