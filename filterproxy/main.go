@@ -73,7 +73,8 @@ func rules(c config, l *url.URL) bool {
 	}
 	if forward {
 		for _, block := range c.Block {
-			if path == block {
+			// l.Host has port number on the end
+			if strings.HasPrefix(path, block) {
 				forward = false
 			}
 		}
