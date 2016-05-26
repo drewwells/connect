@@ -8,10 +8,10 @@ vpn:
     - USER
     - PASS
     - SERVER
-squid:
-  image: sameersbn/squid:3.3.8-14
-  net: container:vpn
-  command: -d ALL,9
+# squid:
+#   image: sameersbn/squid:3.3.8-14
+#   net: container:vpn
+#   command: -d ALL,9
 proxy:
   build: ./goproxy
   dockerfile: Dockerfile
@@ -23,5 +23,6 @@ filter:
   command: app -listen :7800 -config proxy.cfg
   ports:
     - "7800:7800"
+    - "6060:6060"
   links:
     - vpn
