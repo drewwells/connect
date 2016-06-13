@@ -10,6 +10,7 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/elazarl/goproxy"
 	"github.com/hashicorp/hcl"
@@ -82,8 +83,19 @@ func rules(c config, l *url.URL) bool {
 	if forward {
 		// fmt.Println("forwarding request to proxy", path)
 	}
+
+	seenMu.Lock()
+	if _, ok := seen[path]; !ok {
+		fmt.Println("addr ", forward, path)
+		seen[path] = struct{}{}
+	}
+	seenMu.Unlock()
+
 	return forward
 }
+
+var seenMu = sync.RWMutex{}
+var seen = map[string]struct{}{}
 
 // FIXME: make it part of config
 var printVerbose bool
